@@ -1,0 +1,48 @@
+
+/elasticmail/config/id
+
+/user%40domain/config/0
+
+/user%40domain/config/path
+{
+    "uid_validity": 0,
+    "owner": "user%40domain",
+    "user": "user",
+    "domain": "domain",
+    "aliases": ["alias1", ...],
+    "path": "path"
+    "readers": ["user1", ...],
+    "writers": ["user1", ...],
+}
+
+/user%40domain/mail/id
+{
+    "uid": id,
+    "owner": "user%40domain",
+    "user": "user",
+    "domain": "domain",
+    "mailboxes": ["mailbox1", ...]
+    "headers":
+        {
+            "header1": ["value1", ...],
+            "header2": ["value2", ...]
+        }
+
+    "body":
+        [
+            "part"|null: 
+                {
+                    "partHeader1": ["value1", ...],
+                    "partHeader2": ["value2", ...],
+                    "body": "part body",
+                    "raw": "raw string of part"
+                }
+        ]
+
+    "raw": "raw string of message"
+    "id": "msg_id"
+
+    "flags": ["flag1", "flag2", ...]
+}
+
+
