@@ -22,6 +22,7 @@ setup(name='elasticmail',
       install_requires=[
           'twisted',
           'anyjson',
+          'txes',
       ],
       entry_points="""
       # -*- Entry points: -*-
