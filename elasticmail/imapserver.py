@@ -1,7 +1,13 @@
-import urllib
-import urlparse
+import sys
+try:
+    import cStringIO as StringIO
+except ImportError:
+    import StringIO
+import time
 
-import anyjson
+import txes
+
+from email import parser, iterators
 
 from twisted.cred import portal
 from twisted.internet import defer
@@ -10,92 +16,146 @@ from twisted.web import client
 from zope.interface import implements
 
 
-MAILBOXDELIMITER = '/'
-ES_URL = "http://192.168.56.101:9200"
+DELIM = '/'
+ES = "192.168.56.101:9200"
 
-def getPageFactory(url, contextFactory=None, *args, **kwargs):
-    return client._makeGetterFactory(url, client.HTTPClientFactory,
-                                     contextFactory, *args, **kwargs)
+
+emailparser = parser.Parser()
 
 
 class ElasticSearchError(Exception):
     pass
 
 
-class ImapUserAccount(object):
+def formatName(name):
+    if name.lower().startswith("inbox")
+        return DELIM.join(["INBOX"] + name.split(DELIM)[1:])
+    return name
+
+
+class ElasticSearchClient(object):
+    def __init__(self, *args, **kwargs):
+        es = kwargs.get("servers") or kwargs.get("es") or ES
+        self.es = txes.ElasticSearch(servers=es, discover=False)
+
+
+class ImapUserAccount(ElasticSearchClient):
     implements(imap4.IAccount, imap4.INamespacePresenter)
 
-    def __init__(self, owner):
+    def __init__(self, owner, *args, **kwargs):
+        ElasticSearchClient.__init__(self, *args, **kwargs)
         self.owner = owner
-        self.user self.domain = owner.split('@')
+        self.args = args
+        self.kwargs = kwargs
 
-    def _setAlias(self, mbox, name):
-        pass
+    def _newValidityUid(self):
+        def factor(data):
+            validityUid = int(time.time() % sys.maxint)
+            if not data["hits"]["total"]:
+                return validityUid
+
+            hits = data["hits"]["hits"]
+            usedUids = [d["fields"]["uid_validity"] for d in hits]
+
+            while validityUid not in usedUids:
+                validityUid = validityUid + 1
+            return validityUid
+
+        q = {"filter": {"exists": {"field": "uid_validity"}},
+             "fields": ["uid_validity"]}
+        d = self.es.search(q, self.owner, "config")
+        return d.addCallback(factor)
+
+    def _setupMailbox(self, path):
+        def setup(validityUid):
+            data = {"uid_validity": validityUid,
+                    "owner": self.owner,
+                    "path": path,
+                    "flags": [],
+                    "deleted": False,
+                    "readers": [self.owner],
+                    "writers": [self.owner]}
+            d = self.es.index(data, self.owner, "config")
+            return d.addCallback(lambda x: x["ok"] or False)
+
+        d = self._newValidityUid()
+        d.addCallback(setup)
+        return d.addErrback(lambda _: False)
+
+    def _getMailboxQuery(self, name):
+        name = formatName(name)
+        q = {"query": {"term": {"path": name}}}
+        d = self.es.search(q, self.owner, "config")
+        return d.addCallback(collision)
 
     def addMailbox(self, name, mbox=None):
-        if mbox:
-            return self._setAlias(mbox, name)
-        else:
-            return self.create(name)
+        name = formatName(name)
+
+        def collision(results):
+            if results["hits"]["total"]:
+                raise imap4.MailboxCollision(name)
+            if not mbox:
+                return self._setupMailbox(name)
+            return False
+
+        d = self._getMailboxQuery(name)
+        return d.addCallback(collision)
 
     def create(self, pathspec):
-        pathspec = pathspec.strip(MAILBOXDELIMITER)
+        def factor(results):
+            for success, value in results:
+                if not success:
+                    value.trap(imap4.MailboxCollision)
+            return True
 
-        d = self.ensure_path(pathspec)
-        return d
-            
-    def ensureMailboxConfig(self, path):
-        mailbox = path.split(MAILBOXDELIMITER)[-1]
-        url = '/'.join([ES_URL, self.user, "config", path])
-        user, domain = self.user.split('@')
-
-        data = { "uid_validity": self.newValidityUID(),
-                 "owner": self.owner,
-                 "user": self.user,
-                 "domain": self.domain,
-                 "aliases": [],
-                 "path": path,
-                 "mailbox": mailbox
-                 "readers": [self.owner],
-                 "writers": [self.owner],
-                 }
-        factory = getPageFactory(url, method="PUT", postdata=data) 
-
-        def success(body):
-            res = anyjson.deserialize(body)
-
-        def fail(error):
-            raise imap4.MailboxException()
-
-        factory.deferred.addCallbacks(callback=success, errback=fail)
-        return factory.deferred
-
-    def ensure_index(self, user):
-        url = '/'.join([ES_URL, user])
-        factory = getPageFactory(url, method="PUT")
-
-        def success(body):
-            res = anyjson.deserialize(body)
-
-            if int(factory.status) != 200:
-                raise ElasticSearchError(res.get("error"))
-            elif not res.get("ok"):
-                raise ElasticSearchError(body)
-
-            return (imap4.IAccount, ImapUserAccount(user), lambda: None)
-        
-        factory.deferred.addCallback(success)
-        return factory.deferred
-        
-    def requestAvatar(self, avatarId, mind, *interfaces):
-        if imap4.IAccount in interfaces:
-            return self.ensure_index(avatarId)
-
+        pathspec = formatName(pathspec)
+        paths = filter(None, pathspec.split(DELIM))
+        dList = []
+        for accum in range(1, len(paths)+1):
+            dList.append(self.addMailbox(DELIM.join(paths[:accum])))
+        return dList.addCallback(factor)
+ 
     def select(self, name, rw=True):
-        pass
+        name = formatName(name)
+        def factor(results):
+            if results["hits"]["total"]:
+                return ElasticMailbox(self.owner, name, *self.args,
+                                      rw=rw, **self.kwargs)
+            return None
+
+        d = self._getMailboxQuery(name)
+        return d.addCallback(factor)
 
     def delete(self, name):
-        pass
+        name = formatName(name)
+
+        def checkFlags(mbox):
+            def raiseOrDestroy(results):
+                configs = [r["source"] for r in results["hits"]["hits"]]
+                for other in configs:
+                    opath = other["path"]
+                    if opath != name and opath.startswith(name + DELIM):
+                        raise MailboxException("Hierarchically inferior "
+                                               "mailboxes exist and "
+                                               "\\Noselect is set")
+                return mbox.destroy()
+
+            if "\\Noselect" in mbox.getFlags():
+                q = {"query": {"prefix": {"path": name}}}
+                d = es.search(q, self.owner, "config")
+                return d.addCallback(raiseOrDestroy)
+ 
+            return mbox.destroy()
+
+        def checkExists(results):
+            if not results["hits"]["total"]:
+                raise imap4.MailboxException("No such mailbox")
+
+            d = self.select(name)
+            return d.addCallback(checkFlagsAndDestroy)
+
+        d = self._getMailboxQuery(name)
+        return d.addCallback(checkExists)
 
     def rename(self, oldname, newname):
         pass
@@ -122,52 +182,82 @@ class ImapUserAccount(object):
         pass
 
 
-class ElasticMessage(object):
-    implements(imap4.IMessage, imap4.IMessageFile)
+class ElasticMessagePart(object):
+    implements(imap4.IMessagePart)
 
-    def getHeaders(self, negate, *names):
-        pass
+    def __init__(self, message):
+        self.message = message
+        self.data = str(self.message)
 
     def getBodyFile(self):
-        pass
+        return StringIO(str(self.message.get_payload()))
+
+    def getHeaders(self, negate, *names):
+        names = set([name.lower() for name in names])
+        if negate:
+            headers = [name.lower() for name in self.message.keys() \
+                       if name not in names]
+        else:
+            headers = names
+        return dict([(name, self.message[name]) for name in headers \
+                     if name in self.message])
 
     def getSize(self):
-        pass
+        return len(self.data)
+
+    def getSubPart(self, index):
+        return ElasticMessagePart(self.message.get_payload(index))
 
     def isMultipart(self):
-        pass
+        return self.message.is_multipart()
 
-    def getSubPart(self, part):
-        pass
+
+class ElasticMessage(ElasticMessagePart):
+    implements(imap4.IMessage, imap4.IMessageFile)
+
+    def __init__(self, uid, flags, msg):
+        self.data = mmsg
+        self.message = email.message_from_string(self.data)
+        self.uid = uid
+        self.flags = flags
 
     def getUID(self):
-        pass
+        return self.uid
 
     def getFlags(self):
-        pass
+        return self.flags
 
     def getInternalDate(self):
-        pass
+        return self.message.get("Date", '')
 
     def open(self):
-        pass
+        return StringIO(self.data)
 
 
-class ElasticMailbox(object):
+class ElasticMailbox(ElasticSearchClient):
     implements(imap4.IMailbox, imap4.IMessageCopier,
                imap4.ISearchableMailbox)
+
+    def __init__(self, owner, path, uidValidity, *args, rw=True, **kwargs):
+        ElasticSearchClient.__init__(self, *args, **kwargs):
+        self.owner = owner
+        self.path = path
+        self.uidValidity = uidValidity
+        self.rw = rw
+        self.listeners = []
 
     def copy(self, messageObject):
         pass
 
     def getFlags(self):
-        pass
+        return ["\\Seen", "\\Unseen", "\\Deleted", "\\Flagged",
+                "\\Answered", "\\Recent"]
 
     def getHierarchicalDelimiter(self):
-        pass
+        return DELIM
 
     def getUIDValidity(self):
-        pass
+        retrun self.uidValidity
 
     def getUIDNext(self):
         pass
@@ -188,7 +278,6 @@ class ElasticMailbox(object):
         pass
 
     def destroy(self):
-        pass
 
     def requestStatus(self, names):
         pass
@@ -215,27 +304,13 @@ class ElasticMailbox(object):
         pass
 
 
-class ImapUserRealm(object):
+class ImapUserRealm(ElasticSearchClient):
     implements(portal.IRealm)
 
-    def ensureIndex(self, user):
-        url = '/'.join([ES_URL, user])
-        factory = getPageFactory(url, method="PUT")
-
-        def success(body):
-            res = anyjson.deserialize(body)
-
-            if int(factory.status) != 200:
-                raise ElasticSearchError(res.get("error"))
-            elif not res.get("ok"):
-                raise ElasticSearchError(body)
-
-            return (imap4.IAccount, ImapUserAccount(user), lambda: None)
-        
-        factory.deferred.addCallback(success)
-        return factory.deferred
-        
     def requestAvatar(self, avatarId, mind, *interfaces):
         if imap4.IAccount in interfaces:
-            return self.ensureIndex(avatarId)
+            d = es.createIndexIfMissing(avatarId)
+            return d.addCallback(lambda _: (imap4.IAccount,
+                                            ImapUserAccount(avatarId),
+                                            lambda: None))
         raise KeyError("None of the requested interfaces is supported")
