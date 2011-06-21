@@ -71,6 +71,7 @@ class ImapUserAccount(ElasticSearchClient):
             data = {"uid_validity": validityUid,
                     "owner": self.owner,
                     "path": path,
+                    "search": {"query": {"term": {"path": path}}},
                     "flags": [],
                     "deleted": False,
                     "readers": [self.owner],
@@ -238,16 +239,25 @@ class ElasticMailbox(ElasticSearchClient):
     implements(imap4.IMailbox, imap4.IMessageCopier,
                imap4.ISearchableMailbox)
 
-    def __init__(self, owner, path, uidValidity, *args, rw=True, **kwargs):
+    def __init__(self, owner, path, uidValidity, *args,
+                 rw=True, uidNext=0, messagesMeta=None, refreshTime=30,
+                 **kwargs):
         ElasticSearchClient.__init__(self, *args, **kwargs):
         self.owner = owner
         self.path = path
-        self.uidValidity = uidValidity
+        self.refreshTime = refreshTime
         self.rw = rw
+        self.uidValidity = uidValidity
+        self.uidNext = uidNext
+
+        if not messagesMeta:
+            messagesMeta = []
+        self.messagesMeta = messagesMeta
+
         self.listeners = []
 
     def copy(self, messageObject):
-        pass
+        deferred = None
 
     def getFlags(self):
         return ["\\Seen", "\\Unseen", "\\Deleted", "\\Flagged",
@@ -257,51 +267,58 @@ class ElasticMailbox(ElasticSearchClient):
         return DELIM
 
     def getUIDValidity(self):
-        retrun self.uidValidity
+        return self.uidValidity
 
     def getUIDNext(self):
+        integer = None
         pass
 
     def getUID(self, message):
+        integer = None
         pass
 
     def getMessageCount(self):
+        integer = None
         pass
 
     def getRecentCount(self):
+        integer = None
         pass
 
     def getUnseenCount(self):
+        integer = None
         pass
 
     def isWriteable(self):
-        pass
+        return self.rw
 
     def destroy(self):
+        nothing = None
+        mustSet = "\\Noselect"
 
     def requestStatus(self, names):
-        pass
+        deferred = None
 
     def addListener(self, listener):
-        pass
+        self.listeners.append(listener)
 
     def removeListener(self, listener):
-        pass
+        self.listeners.remove(listener)
 
     def addMessage(self, message, flags=(), date=None):
-        pass
+        deferred = None
 
     def expunge(self):
-        pass
+        deferred = None
 
     def fetch(self, message, uid):
-        pass
+        deferred = None
 
     def store(self, messages, flags, mode, uid):
-        pass
+        deferred = None
 
     def search(query, uid):
-        pass
+        deferred = None
 
 
 class ImapUserRealm(ElasticSearchClient):

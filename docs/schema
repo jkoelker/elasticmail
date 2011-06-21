@@ -11,6 +11,7 @@
     "domain": "domain",
     "aliases": ["alias1", ...],
     "path": "path"
+    "search": query to define messages
     "readers": ["user1", ...],
     "writers": ["user1", ...],
 }
