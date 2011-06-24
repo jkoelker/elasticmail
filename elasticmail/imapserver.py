@@ -1,9 +1,11 @@
+import inspect
 import sys
 try:
     import cStringIO as StringIO
 except ImportError:
     import StringIO
 import time
+import urllib
 
 import txes
 
@@ -23,6 +25,66 @@ ES = "192.168.56.101:9200"
 emailparser = parser.Parser()
 
 
+# From dectools package. This function is MIT licensed
+# Copyright (c) 2010 by Charles Merriam
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+def _dict_as_called(function, args, kwargs):
+    """ return a dict of all the args and kwargs as the keywords they would
+    be received in a real function call.  It does not call function.
+    """
+
+    names, args_name, kwargs_name, defaults = inspect.getargspec(function)
+
+    # assign basic args
+    params = {}
+    if args_name:
+        basic_arg_count = len(names)
+        params.update(zip(names[:], args))  # zip stops at shorter sequence
+        params[args_name] = args[basic_arg_count:]
+    else:
+        params.update(zip(names, args))
+
+    # assign kwargs given
+    if kwargs_name:
+        params[kwargs_name] = {}
+        for kw, value in kwargs.iteritems():
+            if kw in names:
+                params[kw] = value
+            else:
+                params[kwargs_name][kw] = value
+    else:
+        params.update(kwargs)
+
+    # assign defaults
+    if defaults:
+        for pos, value in enumerate(defaults):
+            if names[-len(defaults) + pos] not in params:
+                params[names[-len(defaults) + pos]] = value
+
+    # check we did it correctly.  Each param and only params are set
+    set1 = set(params.iterkeys())
+    set2 = (set(names)|set([args_name])|set([kwargs_name]))-set([None])
+    assert set1 == set2
+    return params
+
+
 class ElasticSearchError(Exception):
     pass
 
@@ -33,11 +95,41 @@ def formatName(name):
     return name
 
 
-class ElasticSearchClient(object):
+class ElasticSearchPathWrapper(object):
     def __init__(self, *args, **kwargs):
         es = kwargs.get("servers") or kwargs.get("es") or ES
         self.es = txes.ElasticSearch(servers=es, discover=False)
 
+    def _wrap_path(self, function, *args, **kwargs):
+        params = _dict_as_called(function, args, kwargs)
+
+        if "docType" in params:
+            params["docType"] = urllib.quote(params["docType"])
+
+        elif "docTypes" in params:
+            if not params["docTypes"]:
+                pass
+
+            elif isinstance(docTypes, basestring):
+                params["docTypes"] = urllib.quote(params["docTypes"])
+
+            else:
+                params["docTypes"] = [urllib.quote(dt) \
+                                      for dt in params["docTypes"]]
+        return function(**params)
+
+    def __getattr__(self, name):
+        if hasattr(self.es, name):
+            func = getattr(self.es, name)
+            return lambda *args, **kwargs: self._wrap_path(func, *args,
+                                                           **kwargs)
+        raise AttributeError(name)
+
+
+class ElasticSearchClient(object):
+    def __init__(self, *args, **kwargs):
+        es = kwargs.get("servers") or kwargs.get("es") or ES
+        self.es = ElasticSearchPathWrapper(servers=es, discover=False)
 
 class ImapUserAccount(ElasticSearchClient):
     implements(imap4.IAccount, imap4.INamespacePresenter)
