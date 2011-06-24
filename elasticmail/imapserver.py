@@ -104,17 +104,18 @@ class ElasticSearchPathWrapper(object):
         params = _dict_as_called(function, args, kwargs)
 
         if "docType" in params:
-            params["docType"] = urllib.quote(params["docType"])
+            params["docType"] = urllib.quote(params["docType"], safe='')
 
         elif "docTypes" in params:
             if not params["docTypes"]:
                 pass
 
             elif isinstance(docTypes, basestring):
-                params["docTypes"] = urllib.quote(params["docTypes"])
+                params["docTypes"] = urllib.quote(params["docTypes"],
+                                                  safe='')
 
             else:
-                params["docTypes"] = [urllib.quote(dt) \
+                params["docTypes"] = [urllib.quote(dt, safe='') \
                                       for dt in params["docTypes"]]
         return function(**params)
 

@@ -1,9 +1,7 @@
 
-/elasticmail/config/id
+/elasticmail/configs/user@domain
 
-/user%40domain/config/0
-
-/user%40domain/config/path
+/elasticmail/configs/user@domain:INBOX/path/
 {
     "uid_validity": 0,
     "owner": "user%40domain",
